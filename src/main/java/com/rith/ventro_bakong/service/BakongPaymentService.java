@@ -202,11 +202,10 @@ public class BakongPaymentService {
 
             List<Payment> payments = paymentService.getPaymentsByOrderId(orderId.intValue());
             payments.stream()
-                    .filter(p -> "BAKONG".equals(p.getPaymentMethod()))
+                    .filter(p -> "BAKONG".equals(p.getPaymentMethod()) && md5.equals(p.getMd5()))
                     .findFirst()
                     .ifPresent(p -> {
                         p.setPaymentStatus("COMPLETED");
-                        p.setMd5(md5); // Keep the latest MD5
                         paymentService.updatePayment(p.getId(), p);
 
                         Order order = orderService.getOrderById(orderId.intValue());
@@ -217,15 +216,47 @@ public class BakongPaymentService {
                     });
 
             return true;
-
-        } catch (org.springframework.web.client.HttpClientErrorException.Unauthorized e) {
-            logger.error("401 Unauthorized - token is invalid or expired. Renew at https://api-bakong.nbc.org.kh/");
-            return false;
-        } catch (org.springframework.web.client.HttpClientErrorException.NotFound e) {
-            logger.warn("Transaction not found for md5: {}", md5);
-            return false;
         } catch (Exception e) {
-            logger.error("Error calling Bakong verify API", e);
+            logger.error("Error verifying Bakong payment", e);
+            return false;
+        }
+    }
+
+    public boolean checkBakongAccount(String accountId) {
+        try {
+            String apiToken = bakongTokenService.getToken();
+
+            String url = bakongApiBaseUrl.replaceAll("/+$", "") + "/v1/check_bakong_account";
+
+            HttpHeaders headers = new HttpHeaders();
+            headers.setContentType(MediaType.APPLICATION_JSON);
+            headers.setAccept(List.of(MediaType.APPLICATION_JSON));
+            headers.set(HttpHeaders.AUTHORIZATION, "Bearer " + apiToken);
+
+            logger.info("Calling Bakong API: {}", url);
+
+            Map<String, String> body = Map.of("accountId", accountId);
+            HttpEntity<Map<String, String>> entity = new HttpEntity<>(body, headers);
+
+            ResponseEntity<Map> apiResponse = restTemplate.exchange(
+                    url,
+                    HttpMethod.POST,
+                    entity,
+                    Map.class
+            );
+
+            if (apiResponse.getStatusCode() != HttpStatus.OK || apiResponse.getBody() == null) {
+                logger.warn("Bakong API returned non-200 or empty body: {}", apiResponse.getStatusCode());
+                return false;
+            }
+
+            Map<String, Object> responseBody = apiResponse.getBody();
+            logger.info("Bakong check account response: {}", responseBody);
+
+            Object responseCode = responseBody.get("responseCode");
+            return Integer.valueOf(0).equals(responseCode);
+        } catch (Exception e) {
+            logger.error("Error checking Bakong account", e);
             return false;
         }
     }

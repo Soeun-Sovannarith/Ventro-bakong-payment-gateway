@@ -184,62 +184,53 @@ public class BakongPaymentController {
         }
     }
 
-    @PostMapping("/webhook")
-    @Operation(summary = "Webhook endpoint for Bakong payment notifications")
-    public ResponseEntity<?> handleWebhook(
-            @RequestBody Map<String, Object> payload,
-            @RequestHeader(value = "X-Bakong-Signature", required = false) String signature) {
+    @PostMapping("/check-account")
+    @Operation(summary = "Check Bakong Account", description = "Check if a bakong account exists")
+    public ResponseEntity<?> checkAccount(
+            @io.swagger.v3.oas.annotations.parameters.RequestBody(
+                    description = "Bakong Account ID to check",
+                    content = @io.swagger.v3.oas.annotations.media.Content(
+                            mediaType = "application/json",
+                            examples = @io.swagger.v3.oas.annotations.media.ExampleObject(
+                                    value = "{\n  \"accountId\": \"user@bank\"\n}"
+                            )
+                    )
+            )
+            @RequestBody Map<String, String> request) {
         try {
-            logger.info("Webhook received: {}", payload);
-
-            Integer orderId  = Integer.parseInt(payload.get("orderId").toString());
-            String  status   = (String) payload.get("status");
-            Double  amount   = Double.parseDouble(payload.get("amount").toString());
-
-            Order order = orderService.getOrderById(orderId);
-            if (order == null) {
-                return ResponseEntity.status(HttpStatus.NOT_FOUND)
-                        .body(Map.of("error", "Order not found"));
+            String accountId = request.get("accountId");
+            if (accountId == null || accountId.isEmpty()) {
+                return ResponseEntity.status(HttpStatus.BAD_REQUEST)
+                        .body(Map.of("error", "accountId is required"));
             }
 
-            List<Payment> existing = paymentService.getPaymentsByOrderId(orderId);
-            Payment payment = existing.stream()
-                    .filter(p -> "BAKONG".equals(p.getPaymentMethod()))
-                    .findFirst()
-                    .orElse(null);
+            boolean exists = bakongPaymentService.checkBakongAccount(accountId);
 
-            if (payment == null) {
-                payment = new Payment();
-                payment.setOrderId(orderId);
-                payment.setAmount(amount.floatValue());
-                payment.setPaymentMethod("BAKONG");
-                payment.setPaymentStatus("PENDING");
-                paymentService.createPayment(payment);
-            }
-
-            if ("success".equalsIgnoreCase(status) || "completed".equalsIgnoreCase(status)) {
-                payment.setPaymentStatus("COMPLETED");
-                order.setStatus("PAID");
-            } else if ("failed".equalsIgnoreCase(status)) {
-                payment.setPaymentStatus("FAILED");
-                order.setStatus("FAILED");
+            if (exists) {
+                // Use a HashMap to allow null values
+                Map<String, Object> response = new java.util.HashMap<>();
+                response.put("responseCode", 0);
+                response.put("responseMessage", "Account ID exists");
+                response.put("errorCode", null);
+                response.put("data", null);
+                return ResponseEntity.ok(response);
             } else {
-                payment.setPaymentStatus("PENDING");
+                Map<String, Object> response = new java.util.HashMap<>();
+                response.put("responseCode", 1);
+                response.put("responseMessage", "Account ID not found");
+                response.put("errorCode", 11);
+                response.put("data", null);
+                return ResponseEntity.ok(response);
             }
-
-            paymentService.updatePayment(payment.getId(), payment);
-            orderService.updateOrder(orderId, order);
-
-            return ResponseEntity.ok(Map.of(
-                    "message",       "Webhook processed",
-                    "orderId",       orderId,
-                    "paymentStatus", payment.getPaymentStatus(),
-                    "orderStatus",   order.getStatus()
-            ));
         } catch (Exception e) {
-            logger.error("Error processing webhook", e);
-            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
-                    .body(Map.of("error", "Failed to process webhook: " + e.getMessage()));
+            logger.error("Error checking account", e);
+            Map<String, Object> response = new java.util.HashMap<>();
+            response.put("responseCode", 1);
+            response.put("responseMessage", "Error checking account: " + e.getMessage());
+            response.put("errorCode", 99);
+            response.put("data", null);
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(response);
         }
     }
 }
+
